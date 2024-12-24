@@ -9,23 +9,27 @@ import platform
 
 from dotenv import load_dotenv
 
-# Determine the environment: 'dev' or 'pi'
-ENV = os.getenv('ENV')  # default to 'dev' if ENV is not set
+# 1) Determine script's directory
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 2) Determine the environment (dev or pi)
+ENV = os.getenv('ENV')
 if not ENV:
-  if platform.system() == 'Darwin':  # macOS
-      ENV = 'dev'
-  elif platform.system() == 'Linux':  # Assuming Raspberry Pi runs Linux
-      ENV = 'pi'
-  else:
-      ENV = 'dev'  # Default
+    if platform.system() == 'Darwin':  # macOS
+        ENV = 'dev'
+    elif platform.system() == 'Linux':
+        ENV = 'pi'
+    else:
+        ENV = 'dev'
 
-# Load the corresponding .env file
-dotenv_path = f'.env.{ENV}'
-if os.path.exists(dotenv_path):
-    load_dotenv(dotenv_path)
+# 3) Build a full path to your .env file in the script directory
+env_file = os.path.join(SCRIPT_DIR, f'.env.{ENV}')
+
+# 4) Load the .env file from that path
+if os.path.exists(env_file):
+    load_dotenv(env_file)
 else:
-    raise FileNotFoundError(f"The environment file {dotenv_path} does not exist.")
+    raise FileNotFoundError(f"The environment file {env_file} does not exist.")
 
 # Fetch environment variables
 SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
@@ -146,7 +150,7 @@ def find_next_milestone(days_since, milestones):
         if threshold == 0:
             continue  # Avoid division by zero
 
-        if days_since % threshold == 0:
+        if days_since > 0 and days_since % threshold == 0:
             # Exactly on the milestone day
             days_to_next = 0
         else:
@@ -222,7 +226,7 @@ class IncidentDisplay:
     try:
       last_incident_date, milestones = fetch_data()
       days_since = get_days_since(last_incident_date)
-      num_days_text = f"{days_since} {pluralize("Day", days_since)} of Integrity"
+      num_days_text = f"{days_since} {pluralize('Day', days_since)} of Integrity"
       self.label_num_days.config(text=num_days_text)
       examples = "(no lying, cheating, stealing, or sneaking)"
       self.label_examples.config(text=examples)
@@ -232,7 +236,7 @@ class IncidentDisplay:
         if days_to_next == 0:
           reward_text = f"Today's reward: {next_reward}!"
         else:
-          reward_text = f"{days_to_next} more {pluralize("day", days_to_next)} for {next_reward}!"
+          reward_text = f"{days_to_next} more {pluralize('day', days_to_next)} for {next_reward}!"
       else:
         reward_text = "All rewards reached! Keep it going!"
       self.label_next_reward.config(text=reward_text)
@@ -246,8 +250,15 @@ class IncidentDisplay:
     self.root.after(POLL_INTERVAL * 1000, self.update_display)
 
 
+
 def main():
+  def on_escape(event):
+      root.quit()  # or root.destroy()
   root = tk.Tk()
+  root.bind("<Escape>", on_escape)
+  root.config(cursor="none")
+  root.overrideredirect(True)
+  root.attributes("-fullscreen", True)
   display = IncidentDisplay(root)
   root.mainloop()
 
