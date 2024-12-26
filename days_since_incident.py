@@ -59,49 +59,14 @@ def get_sheets_client():
   client = gspread.authorize(creds)
   return client
 
-
-def fetch_data():
+def extract_milestones(sheet):
     """
-    Fetches the most recent incident date and milestone data from the spreadsheet.
-    Returns:
-        (last_incident_date, milestones)
-        - last_incident_date: A datetime.date object for the most recent incident
-        - milestones: A list of (threshold, reward) tuples
+    Extracts the milestone data from the specified sheet.
+    Returns a list of (threshold, reward) tuples.
     """
-    client = get_sheets_client()
-    sheet_incidents = client.open_by_key(SPREADSHEET_KEY).get_worksheet(0)
-    sheet_milestones = client.open_by_key(SPREADSHEET_KEY).get_worksheet(1)
-
-    # 1) Find the most recent incident date
+    # Fetch milestones (threshold, reward)
     # Assuming the first row is a header, skip it
-    incident_records = sheet_incidents.col_values(1)  # All values in column A
-    # Remove the header
-    if len(incident_records) > 0:
-        incident_records = incident_records[1:]
-    # Remove any empty strings
-    incident_records = [row for row in incident_records if row.strip() != '']
-
-    # Parse dates and collect valid ones
-    parsed_dates = []
-    for row in incident_records:
-        try:
-            # Attempt to parse the date
-            parsed_date = datetime.datetime.strptime(row.strip(), "%Y-%m-%d").date()
-            parsed_dates.append(parsed_date)
-        except ValueError:
-            # If parsing fails, skip the row (could be a malformed date or unexpected text)
-            continue
-
-    if not parsed_dates:
-        # Default to some fallback if no valid incidents are recorded
-        last_incident_date = datetime.date(2000, 1, 1)
-    else:
-        # Pick the most recent date
-        last_incident_date = max(parsed_dates)
-
-    # 2) Fetch milestones (threshold, reward)
-    # Assuming the first row is a header, skip it
-    milestone_data = sheet_milestones.get_all_values()
+    milestone_data = sheet.get_all_values()
     if len(milestone_data) > 0:
         milestone_data = milestone_data[1:]
     milestones = []
@@ -115,8 +80,59 @@ def fetch_data():
                 # skip rows that don't have an integer threshold
                 pass
 
-    return last_incident_date, milestones
+    return milestones
 
+def fetch_data():
+    """
+    Fetches the most recent incident date and milestone data from the spreadsheet.
+    Returns:
+        (last_incident_date, milestones)
+        - last_incident_date: A datetime.date object for the most recent incident
+        - milestones: A list of (threshold, reward) tuples
+    """
+    client = get_sheets_client()
+
+    aaron_rewards_sheet = client.open_by_key(SPREADSHEET_KEY).worksheet('Aaron Rewards')
+    michael_rewards_sheet = client.open_by_key(SPREADSHEET_KEY).worksheet('Michael Rewards')
+
+    aaron_rewards = extract_milestones(aaron_rewards_sheet)
+    michael_rewards = extract_milestones(michael_rewards_sheet)
+
+    aaron_incidents = client.open_by_key(SPREADSHEET_KEY).worksheet('Aaron')
+    michael_incidents = client.open_by_key(SPREADSHEET_KEY).worksheet('Michael')
+
+    aaron_last_incident_date = find_last_incident_date(aaron_incidents)
+    michael_last_incident_date = find_last_incident_date(michael_incidents)
+
+    return aaron_last_incident_date, michael_last_incident_date, aaron_rewards, michael_rewards
+
+def find_last_incident_date(sheet):
+    # Find the most recent incident date
+    # Assuming the first row is a header, skip it
+    records = sheet.col_values(1)  # All values in column A
+    # Remove the header
+    if len(records) > 0:
+        records = records[1:]
+    # Remove any empty strings
+    records = [row for row in records if row.strip() != '']
+
+    # Parse dates and collect valid ones
+    parsed_dates = []
+    for row in records:
+        try:
+            # Attempt to parse the date
+            parsed_date = datetime.datetime.strptime(row.strip(), "%Y-%m-%d").date()
+            parsed_dates.append(parsed_date)
+        except ValueError:
+            # If parsing fails, skip the row (could be a malformed date or unexpected text)
+            continue
+
+    if not parsed_dates:
+        # Default to some fallback if no valid incidents are recorded
+        return datetime.date(2000, 1, 1)
+
+    # Pick the most recent date
+    return max(parsed_dates)
 
 def get_days_since(last_incident_date):
   """
@@ -126,61 +142,97 @@ def get_days_since(last_incident_date):
   delta = today - last_incident_date
   return delta.days
 
+class MilestoneStats:
+    def __init__(self, days_since, milestones):
+        self.days_since = days_since
+        self.milestones = milestones
+
+        # Compute next occurrence for each milestone
+        self.todays_reward = None
+        self.next_reward = None
+        self.next_minor_milestones = []
+
+        next_major_milestone = (999, 999, None)
+        next_milestones = []
+        for threshold, reward in milestones:
+
+            if threshold == 0:
+                continue  # Avoid division by zero
+
+            # Check if this milestone is the next major one
+            if days_since < threshold and threshold < next_major_milestone[0]:
+                next_major_milestone = (threshold, threshold - days_since, reward)
+
+            if days_since > 0 and days_since % threshold == 0:
+                # Exactly on the milestone day
+                days_to_next = 0
+            else:
+                # Compute the next multiple beyond today
+                multiplier = (days_since // threshold) + 1
+                next_threshold = threshold * multiplier
+                days_to_next = next_threshold - days_since
+            
+            next_milestones.append((threshold, days_to_next, reward))
+
+            # Keep track of minor milestones (milestones that have been passed once already)
+            if threshold < days_since:
+                self.next_minor_milestones.append((days_to_next, reward))
 
 
-def find_next_milestone(days_since, milestones):
-    """
-    Given the current days_since count and a list of (threshold, reward),
-    returns (days_to_next, reward).
+        # Gather all that are due today (days_to_next == 0)
+        same_day_candidates = [m for m in next_milestones if m[1] == 0]
+        if same_day_candidates:
+            # Pick the one with the highest threshold
+            last_same_day = max(same_day_candidates, key=lambda x: x[0])
+            self.todays_reward = (last_same_day[1], last_same_day[2])
 
-    Behavior:
-    1. If any milestones are exactly due today (days_to_next == 0),
-       return the last one in the original 'milestones' order.
-    2. Otherwise, return the last one in the original 'milestones' order
-       among those with the minimal positive days_to_next.
+        # If there's a next major milestone, use that
+        if next_major_milestone[2]:
+            self.next_reward = (next_major_milestone[1], next_major_milestone[2])
 
-    Repeating milestones are supported by computing the next multiple
-    of each threshold.
-    """
+        # otherwise, use the minor milestone with the minimum days_to_next
+        elif self.next_minor_milestones:
+            self.next_reward = min(self.next_minor_milestones, key=lambda x: x[0])
 
-    # 1) Compute next occurrence for each milestone
-    next_milestones = []
+class IncidentPanel:
+    def __init__(self, root, name, color):
+        self.root = root
+        self.name = name
 
-    for threshold, reward in milestones:
-        if threshold == 0:
-            continue  # Avoid division by zero
+        self.name_label = tk.Label(self.root, text=name, font=("Helvetica", 96), fg=color, bg="black")
+        self.name_label.pack(pady=0)
 
-        if days_since > 0 and days_since % threshold == 0:
-            # Exactly on the milestone day
-            days_to_next = 0
+        self.progress_label = tk.Label(self.root, text="...", font=("Helvetica", 48), fg="white", bg="black")
+        self.progress_label.pack(pady=50)
+
+        self.reward_label = tk.Label(self.root, text="...", font=("Helvetica", 24), fg=color, bg="black")
+        self.reward_label.pack(pady=0)
+
+        self.minor_rewards_label = tk.Label(self.root, text="", font=("Helvetica", 18), fg="white", bg="black")
+        self.minor_rewards_label.pack(pady=10)
+
+    def update(self, days_since, milestones):
+        milestone_stats = MilestoneStats(days_since, milestones)
+        minor_reward_text = ""
+
+        # Update Progress Label
+        if days_since == 0:
+            progress_text = "Today is a\nDay of Integrity"
         else:
-            # Compute the next multiple beyond today
-            multiplier = (days_since // threshold) + 1
-            next_threshold = threshold * multiplier
-            days_to_next = next_threshold - days_since
-        
-        next_milestones.append((threshold, days_to_next, reward))
+            progress_text = f"{days_since} {pluralize('Day', days_since)} of Integrity!"
+    
+        self.progress_label.config(text=progress_text)
 
-    # 2) If no milestones exist, return (None, None)
-    if not next_milestones:
-        return None, None
+        # Update Reward Labels
+        if milestone_stats.todays_reward:
+            reward_text = f"Today's reward:\n{milestone_stats.todays_reward[1]}!"
+        else:
+            reward_text = f"{milestone_stats.next_reward[0]} more {pluralize('day', milestone_stats.next_reward[0])} for\n{milestone_stats.next_reward[1]}!"
+            for days_to_next, reward in milestone_stats.next_minor_milestones:
+                minor_reward_text += f"\n - {days_to_next} {pluralize('day', days_to_next)}: {reward}"
 
-    # 3) Gather all that are due today (days_to_next == 0)
-    same_day_candidates = [m for m in next_milestones if m[1] == 0]
-    if same_day_candidates:
-        # Pick the last one in original list order => the last in same_day_candidates
-        last_same_day = same_day_candidates[-1]
-        return (last_same_day[1], last_same_day[2])
-
-    # 4) No milestones are due today, so find the minimal positive days_to_next
-    min_days = min(m[1] for m in next_milestones)
-    # 5) Collect all that match this minimal days_to_next
-    candidates = [m for m in next_milestones if m[1] == min_days]
-
-    # 6) Return the last candidate among the ties
-    last_candidate = candidates[-1]
-    return (last_candidate[1], last_candidate[2])
-
+        self.reward_label.config(text=reward_text)
+        self.minor_rewards_label.config(text=minor_reward_text)
 class IncidentDisplay:
   def __init__(self, root):
     self.root = root
@@ -195,56 +247,54 @@ class IncidentDisplay:
     self.container.pack(fill="both", expand=True)
 
     # Top spacer expands vertically
-    top_spacer = tk.Frame(self.container, bg="black")
+    top_spacer = tk.Frame(self.container, bg="black", height=100)
     top_spacer.pack(side="top", fill="both", expand=True)
 
     # Main content
     content_frame = tk.Frame(self.container, bg="black")
     content_frame.pack(side="top")
 
-    self.label_num_days = tk.Label(content_frame, text="Loading...", font=("Helvetica", 128), fg="white", bg="black")
-    self.label_num_days.pack(pady=0)
+    # Left column
+    left_frame = tk.Frame(content_frame, bg="black")
+    left_frame.pack(side="left", fill="both", expand=True)
+    self.aaron_panel = IncidentPanel(left_frame, "Aaron", "goldenrod")
 
-    self.label_examples = tk.Label(content_frame, text="", font=("Helvetica", 28), fg="white", bg="black")
-    self.label_examples.pack(pady=0)
+    # Center spacer fixed width
+    center_spacer = tk.Frame(content_frame, bg="black", width=300)
+    center_spacer.pack(side="left", fill="both")
 
-    self.label_next_reward = tk.Label(content_frame, text="", font=("Helvetica", 48), fg="yellow", bg="black")
-    self.label_next_reward.pack(pady=50)
+    # Right column
+    right_frame = tk.Frame(content_frame, bg="black")
+    right_frame.pack(side="right", fill="both", expand=True)
+    self.michael_panel = IncidentPanel(right_frame, "Michael", "tomato")
 
     # Bottom spacer expands vertically
     bottom_spacer = tk.Frame(self.container, bg="black")
     bottom_spacer.pack(side="top", fill="both", expand=True)
 
+    self.example_label = tk.Label(bottom_spacer, text="Build Trust! No lying, cheating, stealing, or sneaking.", font=("Helvetica", 18), fg="white", bg="black")
+    self.example_label.pack(pady=50)
+
     # Start polling in the background
     self.update_display()
-  
+
 
   def update_display(self):
     """
     Poll the spreadsheet, update the display labels, and schedule the next poll.
     """
     try:
-      last_incident_date, milestones = fetch_data()
-      days_since = get_days_since(last_incident_date)
-      num_days_text = f"{days_since} {pluralize('Day', days_since)} of Integrity"
-      self.label_num_days.config(text=num_days_text)
-      examples = "(no lying, cheating, stealing, or sneaking)"
-      self.label_examples.config(text=examples)
+        aaron_last_incident_date, michael_incident_date, aaron_rewards, michael_rewards = fetch_data()
 
-      days_to_next, next_reward = find_next_milestone(days_since, milestones)
-      if next_reward:
-        if days_to_next == 0:
-          reward_text = f"Today's reward: {next_reward}!"
-        else:
-          reward_text = f"{days_to_next} more {pluralize('day', days_to_next)} for {next_reward}!"
-      else:
-        reward_text = "All rewards reached! Keep it going!"
-      self.label_next_reward.config(text=reward_text)
+        days_since_aaron_incident = get_days_since(aaron_last_incident_date)
+        days_since_michael_incident = get_days_since(michael_incident_date)
+
+        self.aaron_panel.update(days_since_aaron_incident, aaron_rewards)
+        self.michael_panel.update(days_since_michael_incident, michael_rewards)
 
     except Exception as e:
-      # If something goes wrong (e.g., connectivity issue, etc.)
-      self.label_examples.config(text="Error fetching data")
-      self.label_next_reward.config(text=str(e))
+        # If something goes wrong (e.g., connectivity issue, etc.)
+        self.example_label.config(text=f"Error fetching data: {e}")
 
     # Schedule next update after POLL_INTERVAL (in ms -> * 1000)
     self.root.after(POLL_INTERVAL * 1000, self.update_display)
