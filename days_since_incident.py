@@ -239,10 +239,13 @@ class IncidentDisplay:
   def __init__(self, root):
     self.root = root
     self.root.title("Days Since Last Incident")
-    #self.root.geometry("1024x768")
+
     # wide screen
     self.root.geometry("1920x1080")
     self.root.configure(bg="black")
+
+    # Keep track of last update time
+    self.last_update = datetime.datetime.now()
 
     # Create a container frame to manage positioning
     self.container = tk.Frame(self.root, bg="black")
@@ -277,6 +280,13 @@ class IncidentDisplay:
     self.example_label = tk.Label(bottom_spacer, text=EXAMPLE_TEXT, font=("Helvetica", 18), fg="white", bg="black")
     self.example_label.pack(pady=50)
 
+    #self.last_update_label = tk.Label(bottom_spacer, text="", font=("Helvetica", 12), fg="white", bg="black")
+    #self.last_update_label.pack(pady=10)
+    
+    # Position the last_update_label in the absolute bottom right of the window
+    self.last_update_label = tk.Label(self.root, text="", font=("Helvetica", 12), fg="white", bg="black")
+    self.last_update_label.place(relx=1.0, rely=1.0, x=-10, y=-10, anchor='se')
+
     # Start polling in the background
     self.update_display()
 
@@ -295,6 +305,12 @@ class IncidentDisplay:
         self.michael_panel.update(days_since_michael_incident, michael_rewards)
 
         self.example_label.config(text=EXAMPLE_TEXT)
+
+        # Update last update time
+        self.last_update = datetime.datetime.now()
+        #self.last_update_label.config(text=f"Last updated: {self.last_update.strftime('%Y-%m-%d %H:%M')}")
+        # Display the last update time in a more human-friendly format
+        self.last_update_label.config(text=f"Last updated: {self.last_update.strftime('%Y-%m-%d %I:%M %p')}")
 
     except Exception as e:
         # If something goes wrong (e.g., connectivity issue, etc.)
