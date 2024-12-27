@@ -9,6 +9,8 @@ import platform
 
 from dotenv import load_dotenv
 
+EXAMPLE_TEXT = "Build Trust! No lying, cheating, stealing, or sneaking."
+
 # 1) Determine script's directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -272,7 +274,7 @@ class IncidentDisplay:
     bottom_spacer = tk.Frame(self.container, bg="black")
     bottom_spacer.pack(side="top", fill="both", expand=True)
 
-    self.example_label = tk.Label(bottom_spacer, text="Build Trust! No lying, cheating, stealing, or sneaking.", font=("Helvetica", 18), fg="white", bg="black")
+    self.example_label = tk.Label(bottom_spacer, text=EXAMPLE_TEXT, font=("Helvetica", 18), fg="white", bg="black")
     self.example_label.pack(pady=50)
 
     # Start polling in the background
@@ -291,6 +293,8 @@ class IncidentDisplay:
 
         self.aaron_panel.update(days_since_aaron_incident, aaron_rewards)
         self.michael_panel.update(days_since_michael_incident, michael_rewards)
+
+        self.example_label.config(text=EXAMPLE_TEXT)
 
     except Exception as e:
         # If something goes wrong (e.g., connectivity issue, etc.)
